@@ -63,7 +63,7 @@ class Config:
 def small_config():
   """Small config."""
   return {"init_scale" : 0.1,
-    "learning_rate" : 1.0,
+    "learning_rate" : 0.001,
     "max_grad_norm" : 5,
     "num_layers" : 2,
     "num_steps" : 20,
@@ -82,7 +82,7 @@ def medium_config():
   """Medium config."""
   return{ 
       "init_scale" : 0.05,
-      "learning_rate" : 1.0,
+      "learning_rate" : 0.001,
       "max_grad_norm" : 5,
       "num_layers" : 2,
       "num_steps" : 35,
@@ -100,7 +100,7 @@ def large_config():
   """Large config."""
   return {
       "init_scale" : 0.04,
-      "learning_rate" : 1.0,
+      "learning_rate" : 0.0001,
       "max_grad_norm" : 10,
       "num_layers" : 2,
       "num_steps" : 35,

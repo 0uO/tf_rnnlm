@@ -9,9 +9,10 @@ import pickle
 import time
 import numpy as np
 from config import Config
+import math
 
 def run_epoch(session, model, data, eval_op=None, verbose=False,
-  outputs=['ppl'], opIO=None, log_rate=10, save_rate=50, state=None):
+  outputs=['ppl'], opIO=None, log_rate=10, save_rate=50, state=None, sentences_mode = False):
   """Runs one epoch on the given data.
      Inputs:
       - session: at tensorflow session
@@ -31,25 +32,26 @@ def run_epoch(session, model, data, eval_op=None, verbose=False,
       - state: set the initial state
   """
   is_pos_int = lambda x: x == int(max(0, x))
-  if is_pos_int(log_rate) and is_pos_int(save_rate):
-    ValueError("log_rate and save_rate must be positive integer")
+  if not (is_pos_int(log_rate) and is_pos_int(save_rate)):
+    raise ValueError("log_rate and save_rate must be positive integer")
 
   epoch_size = data.epoch_size
-  if not epoch_size > 1:
-    ValueError("Epoch_size must be higher than 0. Decrease 'batch_size'")
+  if not epoch_size >= 1:
+    raise ValueError("Epoch_size must be higher than 0. Decrease 'batch_size'")
   config = model.config
   costs = 0.0
   iters, totiters = 0, 0
+  neg_log_probs = []
 
   last_step = config.step if model.is_training else 0
   if last_step > 0 and opIO is not None:
     state = opIO.load_state()
     print("Last step: %d" % last_step)
   elif state is None:
-    state = session.run(model.initial_state)
+    init_state = session.run(model.initial_state)
+    state = init_state
 
   start_time = time.time()
-
   for step, (x, y) in enumerate(data.batch_iterator()):
     if last_step > step: continue
 
@@ -79,6 +81,8 @@ def run_epoch(session, model, data, eval_op=None, verbose=False,
     # (can't just ignore)
     try:
       vals = session.run(fetches, feed_dict)
+      vals_loss_reshape = np.reshape(vals['loss'],(-1, data.max_len))
+      neg_log_probs += list(np.sum(vals_loss_reshape, axis = 1))
     except ValueError as e:
       print("[ERROR] Error while running step %d (value: =\"%s\")" % (step, str(x)),
                 file=sys.stderr)
@@ -89,7 +93,10 @@ def run_epoch(session, model, data, eval_op=None, verbose=False,
 
     cost = vals['cost']
     state = vals['state']
+    if sentences_mode:
+     state = init_state # for independent sentences dataset. the former sent do not influence next sent.
     loss = vals['loss']
+
     costs += np.sum(loss)
     seq_len = vals['seq_len']
     iters += np.sum(seq_len)
@@ -134,6 +141,7 @@ def run_epoch(session, model, data, eval_op=None, verbose=False,
   if "logits" in outputs: out["logits"] = vals["logits"]
   if "state" in outputs: out['state'] = state
   if "choices" in outputs: out['choices'] = vals['choices']
+  if "costs" in outputs: out['costs'] = neg_log_probs
   # Return directly the value if there's only one
   if len(outputs) == 1:
     return out[outputs[0]]
@@ -230,7 +238,7 @@ class RnnlmOp(object):
   def param_default(self, param, val):
     try:
       return self.params.__getattr__(param)
-    except AttributeError:
+    except :
       self.params.__setattr__(param, val)
       return val
 
@@ -244,14 +252,14 @@ class RnnlmOp(object):
     self.config = config
     self.model_initializer = tf.random_uniform_initializer(-config.init_scale, 
                                                             config.init_scale)
-    print(self.config)
+    # print(self.config)
 
   def Model(self, *args, **kwargs):
     model_class = RnnlmOp.MODELS[self.model]
     return model_class(*args, **kwargs)
 
   def __call__(self):
-    self._run()
+    return self._run()
 
   def _run(self):
     raise ValueError("Nothing to do")

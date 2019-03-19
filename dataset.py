@@ -10,6 +10,8 @@ import numpy as np
 import os
 import tensorflow as tf
 from collections import Counter
+import cPickle as pkl
+import json
 
 # Don't change those values. I would have serious side effects on the model. 
 EOS = "<eos>"
@@ -19,11 +21,22 @@ BOS = "<bos>"
 IBOS=1
 
 PAD = "<pad>"
-IPAD=0
+IPAD=0 
 
 
 # Cut sentences after MAX_LEN words
 MAX_LEN = 100
+
+def unicode_to_utf8(d):
+  return dict((key.encode("UTF-8"), value) for (key,value) in d.items())
+
+def load_dict(filename):
+  try:
+      with open(filename, 'rb') as f:
+          return unicode_to_utf8(json.load(f))
+  except:
+      with open(filename, 'rb') as f:
+          return pkl.load(f)
 
 class SingleSentenceData:
   """
@@ -82,15 +95,17 @@ class SentenceSet:
     # n_iter aka. 'epoch_size'
     self.n_iter = self.n_sentences // self.batch_size
 
-    self.sentences.sort(key=len)
+    if shuffle:
+      self.sentences.sort(key=len)
     self.order = np.arange(self.n_iter)
 
-    print(self)
+   # print(self)
     
   def __str__(self):
     return ("SentenceSet:\n"  
            + "\n\t* #sentences: %d" % self.n_sentences
            + "\n\t* batch_size: %d" % self.batch_size
+           + "\n\t* epoch_size: %d" % self.epoch_size
            + "\n\t* #iter: %d" % self.n_iter
            + "\n\t* shuffled: %s" % str(self.shuffle))
 
@@ -101,10 +116,14 @@ class SentenceSet:
   def _raw_to_sentences(self, raw_data):
     """ 
       Inputs:
-        * raw_data: list of word indentifier.  [ int ]. 
+        * raw_data: list of word indentifier.  [ int ].  or processed sentences. [[int],[int],[int],...]
       Output: 
-        * sentences
+        * sentences [[ int ],[ int ],[ int ],..]
     """
+
+    if type(raw_data[0]) is list:
+      return raw_data
+
     ieos = IEOS
     sentences = []
 
@@ -129,13 +148,13 @@ class SentenceSet:
     for i in range(n_iter):
       ii = self.order[i]
       batch_sentences = self.sentences[batch_size*ii:batch_size*(ii+1)]
-      max_len = min(max([len(s) for s in batch_sentences]), MAX_LEN)
-      x = np.zeros([batch_size, max_len])+IPAD
-      y = np.zeros([batch_size, max_len])+IPAD
+      self.max_len = min(max([len(s) for s in batch_sentences]), MAX_LEN)
+      x = np.zeros([batch_size, self.max_len])+IPAD
+      y = np.zeros([batch_size, self.max_len])+IPAD
     
       for j in range(batch_size):
         s = batch_sentences[j] 
-        l = min(80, len(s))
+        l = min(self.max_len, len(s)) # max_len -> 80 by author
         x[j][:l] = [IBOS]+s[:l-1]
         y[j][:l] = s[:l]
 
@@ -148,7 +167,7 @@ class SentenceSet:
 
   @property
   def epoch_size(self):
-    return ((len(self.data) // self.batch_size) - 1)
+    return ((len(self.data) // self.batch_size) ) # -1
 
 class SequenceSet:
   """
@@ -157,6 +176,7 @@ class SequenceSet:
   def __init__(self, raw_data, batch_size, num_steps):
     self.raw_data = np.array(raw_data, dtype=np.int32)
     self.num_steps = num_steps 
+    self.max_len = num_steps 
     self.batch_size = batch_size
     
     self.data_len = data_len = len(raw_data)
@@ -230,11 +250,22 @@ class Datasets:
     valid_path = os.path.join(path, "valid.txt")
     test_path = os.path.join(path, "test.txt")
     
-    if word_to_id is None:
+    if type(word_to_id) is str and os.path.exists(word_to_id): # adapte from sub-word
+      print("load from sub-word...")
+      self.word_to_id = load_dict(word_to_id)
+      for k in self.word_to_id.keys():
+        self.word_to_id[k] = self.word_to_id[k]+1
+      self.word_to_id[EOS] = IEOS
+      self.word_to_id[BOS] = IBOS
+      self.word_to_id[PAD] = IPAD
+      self.word_to_id['UNK'] = IPAD
+    elif type(word_to_id) is dict:
+      print("load word_to_id from parameter")
+      self.word_to_id = word_to_id
+    else:
       print("Building vocabulary...")
       self._build_vocab(train_path)
-    else:
-      self.word_to_id = word_to_id
+
     print("Vocabulary size: %d" % len(self.word_to_id))
 
     if training:
@@ -261,7 +292,7 @@ class Datasets:
       return SentenceSet(data, batch_size)
     else:
       return SequenceSet(data, batch_size, self.num_steps)
-   
+
   def _build_vocab(self, filename):
     counts = Counter()
     with tf.gfile.GFile(filename, "r") as f:
@@ -282,11 +313,12 @@ class Datasets:
 
 
   def _file_to_word_ids(self, filename):
+    # return [ int ]
     d = []
     w2id = self.word_to_id
     with tf.gfile.GFile(filename, "r") as f:
       for line in f:
-        ids = [w2id[w] for w in line.replace("\n"," %s " % EOS).split() if w in w2id]
+        ids = [w2id[w] for w in line.replace("\n"," %s " % EOS).split() if w in w2id] # ignore UNK
         d += ids
 
     return d
